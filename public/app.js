@@ -144,6 +144,15 @@ function connectWebSocket() {
                 console.error('Server error:', data.message);
                 showNotification(data.message, 'error');
                 break;
+            case 'incomingCall':
+                showIncomingCall(data);
+                break;
+            case 'callAnswered':
+                updateCallAnswered(data);
+                break;
+            case 'callCompleted':
+                updateCallCompleted(data);
+                break;
             default:
                 console.log('Unknown message type:', data.type);
         }
@@ -718,17 +727,6 @@ document.addEventListener('visibilitychange', function() {
         connectWebSocket();
     }
 });
-
-// Add to your WebSocket message handler in app.js
-case 'incomingCall':
-    showIncomingCall(data);
-    break;
-case 'callAnswered':
-    updateCallAnswered(data);
-    break;
-case 'callCompleted':
-    updateCallCompleted(data);
-    break;
 
 // Inbound call handling functions
 function showIncomingCall(callData) {
