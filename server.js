@@ -861,4 +861,483 @@ function shutdown() {
     }, 10000);
 }
 
+// ==================== STATISTICS MODULE ====================
+
+const statistics = {
+    // Extension statistics
+    extensions: new Map(),
+    
+    // Queue statistics  
+    queues: new Map(),
+    
+    // System statistics
+    system: {
+        startupTime: new Date(),
+        totalCalls: 0,
+        activeChannels: 0,
+        peakChannels: 0
+    },
+    
+    // Agent statistics
+    agents: new Map(),
+    
+    // Call statistics
+    calls: new Map(),
+    completedCalls: [],
+
+    // Initialize extension tracking
+    initializeExtension(extension) {
+        if (!this.extensions.has(extension)) {
+            this.extensions.set(extension, {
+                extension: extension,
+                status: 'unknown',
+                totalCalls: 0,
+                answeredCalls: 0,
+                missedCalls: 0,
+                totalTalkTime: 0,
+                lastCallStart: null,
+                currentCallStart: null,
+                statusChanges: []
+            });
+        }
+        return this.extensions.get(extension);
+    },
+
+    // Update extension status
+    updateExtensionStatus(extension, status) {
+        const ext = this.initializeExtension(extension);
+        const oldStatus = ext.status;
+        ext.status = status;
+        
+        // Record status change
+        ext.statusChanges.push({
+            timestamp: new Date(),
+            from: oldStatus,
+            to: status
+        });
+        
+        // Keep only last 100 status changes
+        if (ext.statusChanges.length > 100) {
+            ext.statusChanges = ext.statusChanges.slice(-100);
+        }
+        
+        log(LOG_LEVELS.DEBUG, 'Extension status updated', { extension, oldStatus, newStatus: status });
+    },
+
+    // Track call start
+    callStarted(caller, callee, channel) {
+        const callId = `${caller}-${callee}-${Date.now()}`;
+        const callInfo = {
+            id: callId,
+            caller: caller,
+            callee: callee,
+            channel: channel,
+            startTime: new Date(),
+            answeredTime: null,
+            endTime: null,
+            direction: 'outbound', // or 'inbound'
+            status: 'ringing'
+        };
+        
+        this.calls.set(callId, callInfo);
+        this.system.totalCalls++;
+        
+        // Update extension stats
+        const callerExt = this.initializeExtension(caller);
+        callerExt.totalCalls++;
+        callerExt.currentCallStart = new Date();
+        
+        const calleeExt = this.initializeExtension(callee);
+        if (calleeExt.status === 'ringing') {
+            calleeExt.totalCalls++;
+        }
+        
+        log(LOG_LEVELS.INFO, 'Call started tracking', callInfo);
+        return callId;
+    },
+
+    // Track call answered
+    callAnswered(callId, channel) {
+        const call = this.calls.get(callId);
+        if (call) {
+            call.answeredTime = new Date();
+            call.status = 'active';
+            
+            // Update extension stats
+            const callerExt = this.extensions.get(call.caller);
+            const calleeExt = this.extensions.get(call.callee);
+            
+            if (callerExt) {
+                callerExt.answeredCalls++;
+            }
+            if (calleeExt) {
+                calleeExt.answeredCalls++;
+                calleeExt.currentCallStart = new Date();
+            }
+            
+            log(LOG_LEVELS.INFO, 'Call answered tracking', call);
+        }
+    },
+
+    // Track call completion
+    callCompleted(callId, reason) {
+        const call = this.calls.get(callId);
+        if (call) {
+            call.endTime = new Date();
+            call.status = 'completed';
+            call.completionReason = reason;
+            
+            // Calculate durations
+            call.ringDuration = call.answeredTime ? (call.answeredTime - call.startTime) / 1000 : 0;
+            call.talkDuration = call.answeredTime ? (call.endTime - call.answeredTime) / 1000 : 0;
+            call.totalDuration = (call.endTime - call.startTime) / 1000;
+            
+            // Update extension stats
+            const callerExt = this.extensions.get(call.caller);
+            const calleeExt = this.extensions.get(call.callee);
+            
+            if (callerExt) {
+                callerExt.totalTalkTime += call.talkDuration;
+                callerExt.currentCallStart = null;
+                
+                if (call.talkDuration === 0 && call.ringDuration > 0) {
+                    callerExt.missedCalls++;
+                }
+            }
+            
+            if (calleeExt) {
+                calleeExt.totalTalkTime += call.talkDuration;
+                calleeExt.currentCallStart = null;
+                
+                if (call.talkDuration === 0 && call.ringDuration > 0) {
+                    calleeExt.missedCalls++;
+                }
+            }
+            
+            // Move to completed calls
+            this.calls.delete(callId);
+            this.completedCalls.push(call);
+            
+            // Keep only last 1000 completed calls
+            if (this.completedCalls.length > 1000) {
+                this.completedCalls = this.completedCalls.slice(-1000);
+            }
+            
+            log(LOG_LEVELS.INFO, 'Call completed tracking', call);
+        }
+    },
+
+    // Queue statistics
+    updateQueueStats(queueName, data) {
+        if (!this.queues.has(queueName)) {
+            this.queues.set(queueName, {
+                name: queueName,
+                callsWaiting: 0,
+                callsAnswered: 0,
+                callsAbandoned: 0,
+                totalWaitTime: 0,
+                maxWaitTime: 0,
+                agents: new Map(),
+                serviceLevel: 0,
+                lastReset: new Date()
+            });
+        }
+        
+        const queue = this.queues.get(queueName);
+        
+        if (data.members !== undefined) queue.agentsTotal = data.members;
+        if (data.calls !== undefined) queue.callsWaiting = data.calls;
+        if (data.completed !== undefined) queue.callsAnswered = data.completed;
+        
+        log(LOG_LEVELS.DEBUG, 'Queue stats updated', { queue: queueName, data: data });
+    },
+
+    // Update queue member
+    updateQueueMember(queueName, memberData) {
+        const queue = this.queues.get(queueName);
+        if (queue) {
+            queue.agents.set(memberData.member, {
+                name: memberData.member,
+                status: memberData.status,
+                paused: memberData.paused === '1',
+                callsTaken: memberData.callsTaken || 0,
+                lastCall: null
+            });
+        }
+    },
+
+    // Get comprehensive statistics for client
+    getFullStats() {
+        const now = new Date();
+        const uptime = (now - this.system.startupTime) / 1000;
+        
+        return {
+            extensions: Array.from(this.extensions.values()),
+            queues: Array.from(this.queues.values()).map(queue => ({
+                ...queue,
+                agents: Array.from(queue.agents.values()),
+                serviceLevel: this.calculateServiceLevel(queue.name)
+            })),
+            system: {
+                ...this.system,
+                uptime: uptime,
+                uptimeFormatted: this.formatUptime(uptime),
+                activeCalls: this.calls.size,
+                completedCalls: this.completedCalls.length,
+                activeChannels: this.system.activeChannels
+            },
+            activeCalls: Array.from(this.calls.values()).map(call => ({
+                ...call,
+                currentDuration: call.answeredTime ? (now - call.answeredTime) / 1000 : (now - call.startTime) / 1000
+            })),
+            recentCalls: this.completedCalls.slice(-50), // Last 50 calls
+            timestamp: now
+        };
+    },
+
+    // Calculate service level for queue (answered in X seconds)
+    calculateServiceLevel(queueName) {
+        // This would require more detailed tracking of answer times
+        // For now, return a placeholder calculation
+        const queue = this.queues.get(queueName);
+        if (!queue || queue.callsAnswered === 0) return 0;
+        
+        return Math.min(100, Math.round((queue.callsAnswered / (queue.callsAnswered + queue.callsAbandoned)) * 100));
+    },
+
+    // Format uptime to human readable
+    formatUptime(seconds) {
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        
+        return `${days}d ${hours}h ${minutes}m ${secs}s`;
+    },
+
+    // Get extension-specific statistics
+    getExtensionStats(extension) {
+        const ext = this.extensions.get(extension);
+        if (!ext) return null;
+        
+        const now = new Date();
+        return {
+            ...ext,
+            currentCallDuration: ext.currentCallStart ? (now - ext.currentCallStart) / 1000 : 0,
+            averageTalkTime: ext.answeredCalls > 0 ? ext.totalTalkTime / ext.answeredCalls : 0,
+            answerRate: ext.totalCalls > 0 ? (ext.answeredCalls / ext.totalCalls) * 100 : 0
+        };
+    },
+
+    // Reset statistics (optional)
+    resetStatistics() {
+        this.extensions.clear();
+        this.queues.clear();
+        this.calls.clear();
+        this.completedCalls = [];
+        this.system.totalCalls = 0;
+        this.system.peakChannels = 0;
+        
+        log(LOG_LEVELS.INFO, 'Statistics reset');
+    }
+};
+
+// ==================== INTEGRATION WITH EXISTING CODE ====================
+
+// Update your existing event handlers to use the statistics module:
+
+// In extensionstatus event handler:
+amiConnection.on('extensionstatus', (event) => {
+    log(LOG_LEVELS.DEBUG, 'Extension status update', event);
+    
+    const statusText = getStatusText(event.status);
+    statistics.updateExtensionStatus(event.exten, statusText);
+    
+    broadcastToAll({
+        type: 'extensionStatus',
+        extension: event.exten,
+        status: statusText
+    });
+});
+
+// In bridge event handler (call answered):
+amiConnection.on('bridge', (event) => {
+    if (event.bridgestate === 'Link') {
+        log(LOG_LEVELS.INFO, 'Call answered/bridged', event);
+        
+        const callerExt = extractExtensionFromChannel(event.channel1);
+        const calleeExt = extractExtensionFromChannel(event.channel2);
+        
+        if (callerExt && calleeExt) {
+            // Find the call in progress and mark it answered
+            for (const [callId, call] of statistics.calls) {
+                if ((call.caller === callerExt && call.callee === calleeExt) || 
+                    (call.caller === calleeExt && call.callee === callerExt)) {
+                    statistics.callAnswered(callId, event.channel1);
+                    break;
+                }
+            }
+            
+            broadcastToAll({
+                type: 'callAnswered',
+                callerExtension: callerExt,
+                calleeExtension: calleeExt,
+                channel1: event.channel1,
+                channel2: event.channel2
+            });
+        }
+    }
+});
+
+// In hangup event handler:
+amiConnection.on('hangup', (event) => {
+    log(LOG_LEVELS.INFO, 'Call completed', event);
+    
+    const extension = extractExtensionFromChannel(event.channel);
+    
+    // Find and complete the call
+    for (const [callId, call] of statistics.calls) {
+        if (call.channel === event.channel || 
+            call.caller === extension || 
+            call.callee === extension) {
+            statistics.callCompleted(callId, event.cause_txt || 'Normal hangup');
+            break;
+        }
+    }
+    
+    if (extension) {
+        broadcastToAll({
+            type: 'callCompleted',
+            extension: extension,
+            channel: event.channel,
+            duration: event.duration || '0',
+            reason: event.cause_txt || 'Normal hangup'
+        });
+    }
+});
+
+// In newchannel event handler (call start):
+amiConnection.on('newchannel', (event) => {
+    log(LOG_LEVELS.DEBUG, 'New channel created', event);
+    
+    // Track outbound calls from operator panel
+    if (event.channel.startsWith('Local/') && event.calleridnum) {
+        const targetExtension = event.channel.split('/')[1].split('@')[0];
+        const callerExtension = event.calleridnum;
+        
+        statistics.callStarted(callerExtension, targetExtension, event.channel);
+        
+        log(LOG_LEVELS.INFO, 'Call originated', { caller: callerExtension, target: targetExtension });
+        broadcastToUser(callerExtension, {
+            type: 'callProgress',
+            extension: targetExtension,
+            status: 'Ringing'
+        });
+    }
+    
+    // Track inbound calls
+    if ((event.channelstate === '4' || event.channelstate === '5') && event.calleridnum) {
+        const extension = extractExtensionFromChannel(event.channel);
+        if (extension) {
+            statistics.callStarted(event.calleridnum, extension, event.channel);
+            
+            log(LOG_LEVELS.INFO, 'Incoming call detected', {
+                extension: extension,
+                channel: event.channel,
+                callerId: event.calleridnum
+            });
+            
+            broadcastToAll({
+                type: 'incomingCall',
+                extension: extension,
+                channel: event.channel,
+                callerId: event.calleridnum || 'Unknown',
+                callerIdName: event.calleridname || 'Unknown'
+            });
+        }
+    }
+});
+
+// Update queue event handlers:
+amiConnection.on('queuestatus', (event) => {
+    statistics.updateQueueStats(event.queue, event);
+    
+    broadcastToAll({
+        type: 'queueStatus',
+        queue: event.queue,
+        members: event.members,
+        calls: event.calls,
+        completed: event.completed
+    });
+});
+
+amiConnection.on('queuemember', (event) => {
+    statistics.updateQueueMember(event.queue, event);
+    
+    broadcastToAll({
+        type: 'queueMember',
+        queue: event.queue,
+        member: event.membername,
+        status: event.status,
+        paused: event.paused,
+        callsTaken: event.callstaken
+    });
+});
+
+// ==================== STATISTICS API ENDPOINTS ====================
+
+// Add these routes to your Express app:
+
+// Get full statistics
+app.get('/api/stats', requireAuth, (req, res) => {
+    const stats = statistics.getFullStats();
+    res.json(stats);
+});
+
+// Get extension-specific statistics
+app.get('/api/stats/extension/:ext', requireAuth, (req, res) => {
+    const extStats = statistics.getExtensionStats(req.params.ext);
+    if (extStats) {
+        res.json(extStats);
+    } else {
+        res.status(404).json({ error: 'Extension not found' });
+    }
+});
+
+// Get queue statistics
+app.get('/api/stats/queue/:queue', requireAuth, (req, res) => {
+    const queue = statistics.queues.get(req.params.queue);
+    if (queue) {
+        res.json({
+            ...queue,
+            agents: Array.from(queue.agents.values()),
+            serviceLevel: statistics.calculateServiceLevel(req.params.queue)
+        });
+    } else {
+        res.status(404).json({ error: 'Queue not found' });
+    }
+});
+
+// Reset statistics (admin only)
+app.post('/api/stats/reset', requireAuth, (req, res) => {
+    // In production, add admin check here
+    statistics.resetStatistics();
+    res.json({ success: true, message: 'Statistics reset' });
+});
+
+// Real-time statistics WebSocket updates
+function startStatisticsBroadcast() {
+    // Broadcast full statistics every 30 seconds
+    setInterval(() => {
+        const stats = statistics.getFullStats();
+        broadcastToAll({
+            type: 'statsUpdate',
+            data: stats
+        });
+    }, 30000);
+}
+
+// Start statistics broadcasting
+startStatisticsBroadcast();
+
 log(LOG_LEVELS.INFO, 'Server initialization complete');

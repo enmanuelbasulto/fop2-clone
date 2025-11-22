@@ -495,3 +495,173 @@ button:hover {
         transform: translateY(0);
     }
 }
+
+/* Statistics Styles */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-align: center;
+    border-left: 4px solid #667eea;
+}
+
+.stat-card .stat-value {
+    font-size: 2rem;
+    font-weight: bold;
+    color: #667eea;
+    margin-bottom: 0.5rem;
+}
+
+.stat-card .stat-label {
+    font-size: 0.9rem;
+    color: #666;
+    text-transform: uppercase;
+}
+
+/* Tables */
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.stats-table th,
+.stats-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.stats-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #333;
+}
+
+.stats-table tr:hover {
+    background: #f8f9fa;
+}
+
+/* Status badges */
+.status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.status-badge.idle {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-badge.inuse {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-badge.ringing {
+    background: #cce7ff;
+    color: #004085;
+}
+
+.status-badge.busy {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.status-badge.unavailable {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+/* Queue statistics */
+.queue-stat-card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 1rem;
+    border-left: 4px solid #28a745;
+}
+
+.queue-stat-card h3 {
+    margin-top: 0;
+    color: #333;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 0.5rem;
+}
+
+.queue-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.queue-agents {
+    margin-top: 1rem;
+}
+
+.queue-agents h4 {
+    margin-bottom: 0.5rem;
+    color: #666;
+}
+
+.agent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.agent-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+.calls-taken {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Extension statistics grid */
+.extension-stats-grid,
+.calls-stats-grid,
+.recent-calls-grid {
+    background: white;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    
+    .stats-table {
+        font-size: 0.9rem;
+    }
+    
+    .stats-table th,
+    .stats-table td {
+        padding: 0.5rem;
+    }
+}

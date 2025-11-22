@@ -153,6 +153,22 @@ function connectWebSocket() {
             case 'callCompleted':
                 updateCallCompleted(data);
                 break;
+            // Real-time statistics updates
+            case 'statsUpdate':
+                statisticsData = data.data;
+                updateStatisticsDisplay();
+                break;
+
+            case 'extensionStatus':
+                // Update specific extension in statistics
+                if (statisticsData && statisticsData.extensions) {
+                    const extIndex = statisticsData.extensions.findIndex(ext => ext.extension === data.extension);
+                    if (extIndex !== -1) {
+                        statisticsData.extensions[extIndex].status = data.status;
+                        updateExtensionStats();
+                    }
+                }
+                break;
             default:
                 console.log('Unknown message type:', data.type);
         }
@@ -832,3 +848,279 @@ function rejectCall(channel) {
         incomingCallElement.remove();
     }
 }
+
+// Statistics functionality
+let statisticsData = null;
+let statsInterval = null;
+
+// Initialize statistics
+function initializeStatistics() {
+    loadStatistics();
+    // Update statistics every 30 seconds
+    statsInterval = setInterval(loadStatistics, 30000);
+    
+    // Create statistics UI elements
+    createStatisticsUI();
+}
+
+// Load statistics from server
+function loadStatistics() {
+    fetch('/api/stats')
+        .then(response => response.json())
+        .then(stats => {
+            statisticsData = stats;
+            updateStatisticsDisplay();
+        })
+        .catch(error => {
+            console.error('Failed to load statistics:', error);
+        });
+}
+
+// Create statistics UI
+function createStatisticsUI() {
+    // Add statistics tab to the interface
+    const container = document.querySelector('.container');
+    if (!container) return;
+    
+    const statsHTML = `
+        <div class="section">
+            <h2>System Statistics</h2>
+            <div id="systemStats" class="stats-grid"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Extension Statistics</h2>
+            <div id="extensionStats" class="extension-stats-grid"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Queue Statistics</h2>
+            <div id="queueStats" class="queue-stats-grid"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Active Calls</h2>
+            <div id="activeCallsStats" class="calls-stats-grid"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Recent Calls</h2>
+            <div id="recentCallsStats" class="recent-calls-grid"></div>
+        </div>
+    `;
+    
+    const statsSection = document.createElement('div');
+    statsSection.id = 'statisticsSection';
+    statsSection.innerHTML = statsHTML;
+    container.appendChild(statsSection);
+}
+
+// Update statistics display
+function updateStatisticsDisplay() {
+    if (!statisticsData) return;
+    
+    updateSystemStats();
+    updateExtensionStats();
+    updateQueueStats();
+    updateActiveCallsStats();
+    updateRecentCallsStats();
+}
+
+function updateSystemStats() {
+    const container = document.getElementById('systemStats');
+    if (!container || !statisticsData.system) return;
+    
+    const sys = statisticsData.system;
+    container.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-value">${sys.uptimeFormatted}</div>
+            <div class="stat-label">Uptime</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${sys.totalCalls}</div>
+            <div class="stat-label">Total Calls</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${sys.activeCalls}</div>
+            <div class="stat-label">Active Calls</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${sys.activeChannels}</div>
+            <div class="stat-label">Active Channels</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${sys.peakChannels}</div>
+            <div class="stat-label">Peak Channels</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${sys.completedCalls}</div>
+            <div class="stat-label">Completed Calls</div>
+        </div>
+    `;
+}
+
+function updateExtensionStats() {
+    const container = document.getElementById('extensionStats');
+    if (!container || !statisticsData.extensions) return;
+    
+    let html = '<table class="stats-table"><thead><tr><th>Extension</th><th>Status</th><th>Total Calls</th><th>Answered</th><th>Missed</th><th>Talk Time</th><th>Answer Rate</th></tr></thead><tbody>';
+    
+    statisticsData.extensions.forEach(ext => {
+        const answerRate = ext.totalCalls > 0 ? ((ext.answeredCalls / ext.totalCalls) * 100).toFixed(1) : '0.0';
+        const avgTalkTime = ext.answeredCalls > 0 ? (ext.totalTalkTime / ext.answeredCalls).toFixed(1) : '0.0';
+        
+        html += `
+            <tr>
+                <td>${ext.extension}</td>
+                <td><span class="status-badge ${ext.status}">${ext.status}</span></td>
+                <td>${ext.totalCalls}</td>
+                <td>${ext.answeredCalls}</td>
+                <td>${ext.missedCalls}</td>
+                <td>${avgTalkTime}s</td>
+                <td>${answerRate}%</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function updateQueueStats() {
+    const container = document.getElementById('queueStats');
+    if (!container || !statisticsData.queues) return;
+    
+    let html = '';
+    
+    statisticsData.queues.forEach(queue => {
+        const activeAgents = queue.agents ? queue.agents.filter(a => a.status === '1' && !a.paused).length : 0;
+        const pausedAgents = queue.agents ? queue.agents.filter(a => a.paused).length : 0;
+        
+        html += `
+            <div class="queue-stat-card">
+                <h3>${queue.name}</h3>
+                <div class="queue-stats-grid">
+                    <div class="stat">
+                        <div class="value">${queue.callsWaiting || 0}</div>
+                        <div class="label">Waiting</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value">${activeAgents}</div>
+                        <div class="label">Active Agents</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value">${pausedAgents}</div>
+                        <div class="label">Paused</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value">${queue.callsAnswered || 0}</div>
+                        <div class="label">Answered</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value">${queue.serviceLevel || 0}%</div>
+                        <div class="label">Service Level</div>
+                    </div>
+                </div>
+                ${queue.agents ? `
+                <div class="queue-agents">
+                    <h4>Agents</h4>
+                    <div class="agent-list">
+                        ${queue.agents.map(agent => `
+                            <div class="agent-item">
+                                <span>${agent.name}</span>
+                                <span class="agent-status ${agent.paused ? 'paused' : agent.status === '1' ? 'busy' : 'idle'}">
+                                    ${agent.paused ? 'Paused' : agent.status === '1' ? 'Busy' : 'Idle'}
+                                </span>
+                                <span class="calls-taken">${agent.callsTaken || 0} calls</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html || '<p>No queue statistics available</p>';
+}
+
+function updateActiveCallsStats() {
+    const container = document.getElementById('activeCallsStats');
+    if (!container || !statisticsData.activeCalls) return;
+    
+    if (statisticsData.activeCalls.length === 0) {
+        container.innerHTML = '<p>No active calls</p>';
+        return;
+    }
+    
+    let html = '<table class="stats-table"><thead><tr><th>Caller</th><th>Callee</th><th>Direction</th><th>Status</th><th>Duration</th><th>Start Time</th></tr></thead><tbody>';
+    
+    statisticsData.activeCalls.forEach(call => {
+        const duration = call.answeredTime ? call.currentDuration : call.currentDuration + ' (ringing)';
+        html += `
+            <tr>
+                <td>${call.caller}</td>
+                <td>${call.callee}</td>
+                <td>${call.direction}</td>
+                <td>${call.status}</td>
+                <td>${Math.round(duration)}s</td>
+                <td>${new Date(call.startTime).toLocaleTimeString()}</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function updateRecentCallsStats() {
+    const container = document.getElementById('recentCallsStats');
+    if (!container || !statisticsData.recentCalls) return;
+    
+    if (statisticsData.recentCalls.length === 0) {
+        container.innerHTML = '<p>No recent calls</p>';
+        return;
+    }
+    
+    // Show last 10 calls
+    const recentCalls = statisticsData.recentCalls.slice(-10).reverse();
+    
+    let html = '<table class="stats-table"><thead><tr><th>Caller</th><th>Callee</th><th>Duration</th><th>Result</th><th>End Time</th></tr></thead><tbody>';
+    
+    recentCalls.forEach(call => {
+        const result = call.talkDuration > 0 ? 'Answered' : 'Missed';
+        html += `
+            <tr>
+                <td>${call.caller}</td>
+                <td>${call.callee}</td>
+                <td>${Math.round(call.totalDuration)}s</td>
+                <td>${result}</td>
+                <td>${new Date(call.endTime).toLocaleTimeString()}</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+// Add to WebSocket message handler for real-time updates
+case 'statsUpdate':
+    statisticsData = data.data;
+    updateStatisticsDisplay();
+    break;
+
+// Initialize statistics when panel loads
+if (window.location.pathname === '/panel' || window.location.pathname === '/panel.html') {
+    document.addEventListener('DOMContentLoaded', function() {
+        // ... existing initialization ...
+        initializeStatistics();
+    });
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', function() {
+    if (statsInterval) {
+        clearInterval(statsInterval);
+    }
+});
