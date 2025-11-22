@@ -11,149 +11,311 @@ const os = require('os');
 const app = express();
 const HTTP_PORT = 3000;
 
+// Enhanced logging setup
+const LOG_LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3
+};
+
+const CURRENT_LOG_LEVEL = LOG_LEVELS.DEBUG; // Change to INFO for production
+
+function log(level, message, data = null) {
+    const timestamp = new Date().toISOString();
+    const levelStr = Object.keys(LOG_LEVELS).find(key => LOG_LEVELS[key] === level);
+    
+    if (level <= CURRENT_LOG_LEVEL) {
+        const logMessage = `[${timestamp}] [${levelStr}] ${message}`;
+        console.log(logMessage);
+        if (data) {
+            console.log('Data:', data);
+        }
+        
+        // Write to log file
+        const logEntry = logMessage + (data ? ` - ${JSON.stringify(data)}` : '') + '\n';
+        fs.appendFileSync('/tmp/operator-panel.log', logEntry, 'utf8');
+    }
+}
+
 // Get local IP address for LAN access
 function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const interface of interfaces[name]) {
-      if (interface.family === 'IPv4' && !interface.internal) {
-        return interface.address;
-      }
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const interface of interfaces[name]) {
+            if (interface.family === 'IPv4' && !interface.internal) {
+                return interface.address;
+            }
+        }
     }
-  }
-  return '0.0.0.0';
+    return '0.0.0.0';
 }
 
 const LOCAL_IP = getLocalIP();
-console.log(`Local IP address: ${LOCAL_IP}`);
-console.log(`Server will be accessible at: http://${LOCAL_IP}:${HTTP_PORT}`);
+log(LOG_LEVELS.INFO, `Server starting`, { localIP: LOCAL_IP, port: HTTP_PORT });
 
 // Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public'));
 app.use(session({
-  secret: 'your-secret-key-change-this',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false }
+    secret: 'your-secret-key-change-this',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false }
 }));
 
+// Request logging middleware
+app.use((req, res, next) => {
+    log(LOG_LEVELS.INFO, `HTTP ${req.method} ${req.url}`, { 
+        ip: req.ip,
+        userAgent: req.get('User-Agent')
+    });
+    next();
+});
+
 // Load users
-const users = JSON.parse(fs.readFileSync('./config/users.json', 'utf8')).users;
+let users = {};
+try {
+    users = JSON.parse(fs.readFileSync('./config/users.json', 'utf8')).users;
+    log(LOG_LEVELS.INFO, 'Users loaded successfully', { userCount: Object.keys(users).length });
+} catch (error) {
+    log(LOG_LEVELS.ERROR, 'Failed to load users', { error: error.message });
+    process.exit(1);
+}
 
 // Authentication middleware
 function requireAuth(req, res, next) {
-  if (req.session.authenticated) {
-    next();
-  } else {
-    res.redirect('/');
-  }
+    if (req.session.authenticated) {
+        next();
+    } else {
+        log(LOG_LEVELS.WARN, 'Unauthorized access attempt', { path: req.path, ip: req.ip });
+        res.redirect('/');
+    }
 }
 
 // Routes
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/panel', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'panel.html'));
+    log(LOG_LEVELS.INFO, 'Panel access', { user: req.session.extension });
+    res.sendFile(path.join(__dirname, 'public', 'panel.html'));
 });
 
 app.post('/login', (req, res) => {
-  const { extension, password } = req.body;
-  
-  if (users[extension] && bcrypt.compareSync(password, users[extension].password)) {
-    req.session.authenticated = true;
-    req.session.extension = extension;
-    req.session.username = users[extension].name;
-    res.json({ success: true, message: 'Login successful' });
-  } else {
-    res.json({ success: false, message: 'Invalid extension or password' });
-  }
+    const { extension, password } = req.body;
+    log(LOG_LEVELS.INFO, 'Login attempt', { extension: extension });
+    
+    if (users[extension] && bcrypt.compareSync(password, users[extension].password)) {
+        req.session.authenticated = true;
+        req.session.extension = extension;
+        req.session.username = users[extension].name;
+        log(LOG_LEVELS.INFO, 'Login successful', { extension: extension });
+        res.json({ success: true, message: 'Login successful' });
+    } else {
+        log(LOG_LEVELS.WARN, 'Login failed', { extension: extension });
+        res.json({ success: false, message: 'Invalid extension or password' });
+    }
 });
 
 app.post('/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
+    log(LOG_LEVELS.INFO, 'User logout', { user: req.session.extension });
+    req.session.destroy();
+    res.json({ success: true });
 });
 
 // Serve the WebSocket connection info to the client
 app.get('/server-info', (req, res) => {
-  res.json({
-    wsHost: LOCAL_IP,
-    wsPort: 8080
-  });
+    res.json({
+        wsHost: LOCAL_IP,
+        wsPort: 8080
+    });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        connections: connections.size,
+        amiConnected: amiConnection && amiConnection.connected
+    });
 });
 
 // Start HTTP server - bind to all interfaces
 app.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log(`HTTP server running on all interfaces (http://localhost:${HTTP_PORT})`);
-  console.log(`Access via LAN: http://${LOCAL_IP}:${HTTP_PORT}`);
+    log(LOG_LEVELS.INFO, `HTTP server started`, {
+        localUrl: `http://localhost:${HTTP_PORT}`,
+        lanUrl: `http://${LOCAL_IP}:${HTTP_PORT}`
+    });
 });
 
 // WebSocket Server for Real-time Communications - bind to all interfaces
 const wss = new WebSocket.Server({ 
-  port: 8080,
-  host: '0.0.0.0'
+    port: 8080,
+    host: '0.0.0.0'
 }, () => {
-  console.log(`WebSocket server running on all interfaces (ws://localhost:8080)`);
-  console.log(`Access via LAN: ws://${LOCAL_IP}:8080`);
+    log(LOG_LEVELS.INFO, `WebSocket server started`, {
+        localUrl: `ws://localhost:8080`,
+        lanUrl: `ws://${LOCAL_IP}:8080`
+    });
 });
 
 // Store active connections with user info
 const connections = new Map();
+const activeCalls = new Map();
 
-// Connect to Asterisk AMI
-// Use 'localhost' for AMI if Asterisk is on the same machine
-// Use the actual IP if Asterisk is on a different machine
-// In server.js, update the AMI connection section:
-
-// Connect to Asterisk AMI with correct credentials
-const amiConnection = ami(5038, 'localhost', 'operator', 'mysecretpassword', true);
-
-amiConnection.on('connect', () => {
-    console.log('✅ Connected to Asterisk AMI successfully');
+// Enhanced AMI connection with retry logic
+function connectToAMI() {
+    log(LOG_LEVELS.INFO, 'Connecting to Asterisk AMI');
     
-    // Subscribe to events we need
-    amiConnection.action({
-        'Action': 'Events',
-        'EventMask': 'on'
-    });
-    
-    // Get initial queue status
-    amiConnection.action({
-        'Action': 'QueueStatus',
-        'Queue': ''
-    });
-    
-    // Get initial extension status
-    amiConnection.action({
-        'Action': 'ExtensionStateList'
-    });
-});
+    const amiConnection = ami(5038, 'localhost', 'operator', 'mysecretpassword', true);
 
-amiConnection.on('error', (err) => {
-    console.error('❌ AMI connection error:', err);
-});
-
-amiConnection.on('close', () => {
-    console.log('🔌 AMI connection closed');
-});
-
-// Enhanced event handlers for better debugging
-amiConnection.on('userevent', (event) => {
-    console.log('UserEvent:', event);
-});
-
-amiConnection.on('extensionstatus', (event) => {
-    console.log('ExtensionStatus:', event);
-    broadcastToAll({
-        type: 'extensionStatus',
-        extension: event.exten,
-        status: getStatusText(event.status)
+    amiConnection.on('connect', () => {
+        log(LOG_LEVELS.INFO, '✅ Connected to Asterisk AMI successfully');
+        
+        // Subscribe to events we need
+        amiConnection.action({
+            'Action': 'Events',
+            'EventMask': 'on'
+        });
+        
+        // Get initial queue status
+        amiConnection.action({
+            'Action': 'QueueStatus',
+            'Queue': ''
+        });
+        
+        // Get initial extension status
+        amiConnection.action({
+            'Action': 'ExtensionStateList'
+        });
+        
+        setupAMIEventHandlers(amiConnection);
     });
-});
+
+    amiConnection.on('error', (err) => {
+        log(LOG_LEVELS.ERROR, '❌ AMI connection error', { error: err.message });
+        log(LOG_LEVELS.INFO, 'Retrying AMI connection in 10 seconds...');
+        setTimeout(connectToAMI, 10000);
+    });
+
+    amiConnection.on('close', () => {
+        log(LOG_LEVELS.WARN, '🔌 AMI connection closed');
+        log(LOG_LEVELS.INFO, 'Reconnecting AMI in 5 seconds...');
+        setTimeout(connectToAMI, 5000);
+    });
+
+    return amiConnection;
+}
+
+function setupAMIEventHandlers(amiConnection) {
+    // Extension status events
+    amiConnection.on('extensionstatus', (event) => {
+        log(LOG_LEVELS.DEBUG, 'Extension status update', event);
+        broadcastToAll({
+            type: 'extensionStatus',
+            extension: event.exten,
+            status: getStatusText(event.status)
+        });
+    });
+
+    // Queue events
+    amiConnection.on('queuemember', (event) => {
+        log(LOG_LEVELS.DEBUG, 'Queue member update', event);
+        broadcastToAll({
+            type: 'queueMember',
+            queue: event.queue,
+            member: event.membername,
+            status: event.status,
+            paused: event.paused,
+            callsTaken: event.callstaken
+        });
+    });
+
+    amiConnection.on('queueentry', (event) => {
+        log(LOG_LEVELS.DEBUG, 'Queue entry update', event);
+        broadcastToAll({
+            type: 'queueEntry',
+            queue: event.queue,
+            position: event.position,
+            callerId: event.callerid,
+            wait: event.wait
+        });
+    });
+
+    amiConnection.on('queuestatus', (event) => {
+        log(LOG_LEVELS.DEBUG, 'Queue status update', event);
+        broadcastToAll({
+            type: 'queueStatus',
+            queue: event.queue,
+            members: event.members,
+            calls: event.calls,
+            completed: event.completed
+        });
+    });
+
+    // Call events
+    amiConnection.on('newchannel', (event) => {
+        log(LOG_LEVELS.DEBUG, 'New channel created', event);
+        
+        // Check if this is a call we originated
+        if (event.channel.startsWith('Local/') && event.calleridnum) {
+            const targetExtension = event.channel.split('/')[1].split('@')[0];
+            const callerExtension = event.calleridnum;
+            
+            log(LOG_LEVELS.INFO, 'Call originated', { caller: callerExtension, target: targetExtension });
+            broadcastToUser(callerExtension, {
+                type: 'callProgress',
+                extension: targetExtension,
+                status: 'Ringing'
+            });
+        }
+    });
+
+    amiConnection.on('bridge', (event) => {
+        if (event.bridgestate === 'Link') {
+            log(LOG_LEVELS.INFO, 'Call connected', event);
+            
+            // Extract extensions from channel names
+            const callerExt = extractExtensionFromChannel(event.channel1);
+            const targetExt = extractExtensionFromChannel(event.channel2);
+            
+            if (callerExt && targetExt) {
+                broadcastToUser(callerExt, {
+                    type: 'callConnected',
+                    extension: targetExt,
+                    callerId: event.callerid1,
+                    connectedLine: event.callerid2
+                });
+            }
+        }
+    });
+
+    amiConnection.on('hangup', (event) => {
+        log(LOG_LEVELS.INFO, 'Call ended', event);
+        
+        // Extract extension from channel and notify
+        const extension = extractExtensionFromChannel(event.channel);
+        if (extension) {
+            broadcastToUser(extension, {
+                type: 'callEnded',
+                channel: event.channel,
+                reason: event.cause || 'Normal hangup'
+            });
+        }
+    });
+
+    // Other events for debugging
+    amiConnection.on('userevent', (event) => {
+        log(LOG_LEVELS.DEBUG, 'User event received', event);
+    });
+}
+
+// Initialize AMI connection
+const amiConnection = connectToAMI();
 
 // Helper function to convert status codes to text
 function getStatusText(statusCode) {
@@ -167,236 +329,155 @@ function getStatusText(statusCode) {
     };
     return statusMap[statusCode] || 'unknown';
 }
+
+// Helper function to extract extension from channel name
+function extractExtensionFromChannel(channel) {
+    const match = channel.match(/Local\/(\d+)@/);
+    return match ? match[1] : null;
+}
+
 // WebSocket connection handling
 wss.on('connection', (ws, req) => {
-  const clientIP = req.connection.remoteAddress;
-  console.log(`New WebSocket client connected from: ${clientIP}`);
-  
-  ws.on('message', (data) => {
-    try {
-      const message = JSON.parse(data);
-      
-      // Handle authentication first
-      if (message.action === 'authenticate') {
-        const { extension, password } = message;
-        
-        if (users[extension] && bcrypt.compareSync(password, users[extension].password)) {
-          connections.set(ws, { 
-            extension, 
-            name: users[extension].name,
-            ip: clientIP
-          });
-          ws.send(JSON.stringify({ 
-            type: 'auth_success', 
-            user: { extension, name: users[extension].name } 
-          }));
-          console.log(`User ${extension} authenticated via WebSocket from ${clientIP}`);
-        } else {
-          ws.send(JSON.stringify({ type: 'auth_failed', message: 'Invalid credentials' }));
-          ws.close();
+    const clientIP = req.connection.remoteAddress;
+    log(LOG_LEVELS.INFO, 'New WebSocket client connected', { ip: clientIP });
+    
+    ws.on('message', (data) => {
+        try {
+            const message = JSON.parse(data);
+            log(LOG_LEVELS.DEBUG, 'WebSocket message received', { message: message });
+            
+            // Handle authentication first
+            if (message.action === 'authenticate') {
+                const { extension, password } = message;
+                
+                if (users[extension] && bcrypt.compareSync(password, users[extension].password)) {
+                    connections.set(ws, { 
+                        extension, 
+                        name: users[extension].name,
+                        ip: clientIP
+                    });
+                    ws.send(JSON.stringify({ 
+                        type: 'auth_success', 
+                        user: { extension, name: users[extension].name } 
+                    }));
+                    log(LOG_LEVELS.INFO, 'User authenticated via WebSocket', { 
+                        extension: extension, 
+                        ip: clientIP 
+                    });
+                } else {
+                    ws.send(JSON.stringify({ type: 'auth_failed', message: 'Invalid credentials' }));
+                    log(LOG_LEVELS.WARN, 'WebSocket authentication failed', { 
+                        extension: extension, 
+                        ip: clientIP 
+                    });
+                    ws.close();
+                }
+                return;
+            }
+            
+            // Check if user is authenticated for other actions
+            const userInfo = connections.get(ws);
+            if (!userInfo) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
+                log(LOG_LEVELS.WARN, 'Unauthorized WebSocket action attempt', { 
+                    ip: clientIP,
+                    action: message.action 
+                });
+                return;
+            }
+            
+            // Process authenticated actions
+            handleClientMessage(ws, message, userInfo);
+            
+        } catch (error) {
+            log(LOG_LEVELS.ERROR, 'Error processing WebSocket message', { 
+                error: error.message,
+                data: data.toString() 
+            });
         }
-        return;
-      }
-      
-      // Check if user is authenticated for other actions
-      const userInfo = connections.get(ws);
-      if (!userInfo) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
-        return;
-      }
-      
-      // Process authenticated actions
-      handleClientMessage(ws, message, userInfo);
-      
-    } catch (error) {
-      console.error('Error processing client message:', error);
-    }
-  });
-
-  ws.on('close', () => {
-    const userInfo = connections.get(ws);
-    if (userInfo) {
-      console.log(`WebSocket client disconnected: ${userInfo.extension} (${userInfo.ip})`);
-      connections.delete(ws);
-    }
-  });
-
-  ws.on('error', (error) => {
-    console.error('WebSocket error:', error);
-  });
-});
-
-// ... rest of the functions (handleClientMessage, handleDial, etc.) remain the same ...
-function handleClientMessage(ws, message, userInfo) {
-  switch (message.action) {
-    case 'dial':
-      handleDial(message.extension, userInfo.extension);
-      break;
-    case 'hangup':
-      handleHangup(message.channel);
-      break;
-    case 'transfer':
-      handleTransfer(message.channel, message.target, message.context);
-      break;
-    case 'spy':
-      handleSpy(message.channel, userInfo.extension);
-      break;
-    case 'whisper':
-      handleWhisper(message.channel, userInfo.extension);
-      break;
-    case 'pause':
-      handleQueuePause(userInfo.extension, message.queue, message.pause);
-      break;
-  }
-}
-
-// Call Control Functions
-function handleDial(targetExtension, callerExtension) {
-  amiConnection.action({
-    'Action': 'Originate',
-    'Channel': `Local/${targetExtension}@from-internal`,
-    'Context': 'from-internal',
-    'Exten': 's',
-    'Priority': 1,
-    'CallerID': `Operator ${callerExtension} <${callerExtension}>`,
-    'Timeout': 30000
-  }, (err, res) => {
-    if (err) console.error('Dial failed:', err);
-  });
-}
-
-function handleHangup(channel) {
-  amiConnection.action({
-    'Action': 'Hangup',
-    'Channel': channel
-  }, (err, res) => {
-    if (err) console.error('Hangup failed:', err);
-  });
-}
-
-function handleTransfer(channel, target, context = 'from-internal') {
-  amiConnection.action({
-    'Action': 'Redirect',
-    'Channel': channel,
-    'Context': context,
-    'Exten': target,
-    'Priority': 1
-  }, (err, res) => {
-    if (err) console.error('Transfer failed:', err);
-  });
-}
-
-function handleSpy(channel, spyExtension) {
-  // ChanSpy application to listen to a channel
-  amiConnection.action({
-    'Action': 'Originate',
-    'Channel': `Local/${spyExtension}@from-internal`,
-    'Context': 'from-internal',
-    'Exten': 'spy',
-    'Priority': 1,
-    'CallerID': `Spy <${spyExtension}>`,
-    'Variable': `SPY_CHANNEL=${channel}`
-  }, (err, res) => {
-    if (err) console.error('Spy failed:', err);
-  });
-}
-
-function handleWhisper(channel, whisperExtension) {
-  // ChanSpy with whisper option (w)
-  amiConnection.action({
-    'Action': 'Originate',
-    'Channel': `Local/${whisperExtension}@from-internal`,
-    'Context': 'from-internal',
-    'Exten': 'whisper',
-    'Priority': 1,
-    'CallerID': `Coach <${whisperExtension}>`,
-    'Variable': `SPY_CHANNEL=${channel}`
-  }, (err, res) => {
-    if (err) console.error('Whisper failed:', err);
-  });
-}
-
-function handleQueuePause(agent, queue, pause = true) {
-  amiConnection.action({
-    'Action': 'QueuePause',
-    'Interface': `Local/${agent}@from-internal`,
-    'Queue': queue,
-    'Paused': pause ? '1' : '0'
-  }, (err, res) => {
-    if (err) console.error('Queue pause failed:', err);
-  });
-}
-
-// Asterisk Event Handlers for Real-time Updates
-amiConnection.on('extensionstatus', (event) => {
-  broadcastToAll({
-    type: 'extensionStatus',
-    extension: event.exten,
-    status: event.status
-  });
-});
-
-amiConnection.on('queuemember', (event) => {
-  broadcastToAll({
-    type: 'queueMember',
-    queue: event.queue,
-    member: event.membername,
-    status: event.status,
-    paused: event.paused,
-    callsTaken: event.callstaken
-  });
-});
-
-amiConnection.on('queueentry', (event) => {
-  broadcastToAll({
-    type: 'queueEntry',
-    queue: event.queue,
-    position: event.position,
-    callerId: event.callerid,
-    wait: event.wait
-  });
-});
-
-amiConnection.on('queuestatus', (event) => {
-  broadcastToAll({
-    type: 'queueStatus',
-    queue: event.queue,
-    members: event.members,
-    calls: event.calls,
-    completed: event.completed
-  });
-});
-
-amiConnection.on('bridge', (event) => {
-  if (event.bridgestate === 'Link') {
-    broadcastToAll({
-      type: 'callStart',
-      channel1: event.channel1,
-      channel2: event.channel2,
-      callerId1: event.callerid1,
-      callerId2: event.callerid2
     });
-  }
+
+    ws.on('close', (code, reason) => {
+        const userInfo = connections.get(ws);
+        if (userInfo) {
+            log(LOG_LEVELS.INFO, 'WebSocket client disconnected', { 
+                extension: userInfo.extension, 
+                ip: userInfo.ip,
+                code: code,
+                reason: reason.toString()
+            });
+            connections.delete(ws);
+        } else {
+            log(LOG_LEVELS.INFO, 'Unauthenticated WebSocket client disconnected', { 
+                ip: clientIP,
+                code: code,
+                reason: reason.toString()
+            });
+        }
+    });
+
+    ws.on('error', (error) => {
+        log(LOG_LEVELS.ERROR, 'WebSocket error', { 
+            error: error.message,
+            ip: clientIP 
+        });
+    });
 });
 
-function broadcastToAll(message) {
-  connections.forEach((userInfo, ws) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+function handleClientMessage(ws, message, userInfo) {
+    log(LOG_LEVELS.INFO, 'Processing client action', { 
+        user: userInfo.extension, 
+        action: message.action,
+        data: message 
+    });
+    
+    switch (message.action) {
+        case 'dial':
+            handleDial(message.extension, userInfo.extension);
+            break;
+        case 'hangup':
+            handleHangup(message.channel, userInfo.extension);
+            break;
+        case 'transfer':
+            handleTransfer(message.channel, message.target, userInfo.extension);
+            break;
+        case 'spy':
+            handleSpy(message.channel, userInfo.extension);
+            break;
+        case 'whisper':
+            handleWhisper(message.channel, userInfo.extension);
+            break;
+        case 'pause':
+            handleQueuePause(userInfo.extension, message.queue, message.pause);
+            break;
+        default:
+            log(LOG_LEVELS.WARN, 'Unknown action received', { 
+                action: message.action,
+                user: userInfo.extension 
+            });
+            ws.send(JSON.stringify({ 
+                type: 'error', 
+                message: `Unknown action: ${message.action}` 
+            }));
     }
-  });
 }
 
-// Enhanced call handling functions
+// Enhanced Call Control Functions with better logging
 function handleDial(targetExtension, callerExtension) {
-    console.log(`Dialing ${targetExtension} from ${callerExtension}`);
+    log(LOG_LEVELS.INFO, 'Dial request', { caller: callerExtension, target: targetExtension });
     
     // Validate extension format
     if (!/^\d+$/.test(targetExtension)) {
+        const errorMsg = 'Invalid extension format - numbers only';
+        log(LOG_LEVELS.WARN, 'Dial validation failed', { 
+            caller: callerExtension, 
+            target: targetExtension,
+            error: errorMsg 
+        });
         broadcastToUser(callerExtension, {
             type: 'dialFailed',
             extension: targetExtension,
-            reason: 'Invalid extension format'
+            reason: errorMsg
         });
         return;
     }
@@ -422,14 +503,22 @@ function handleDial(targetExtension, callerExtension) {
         'Async': 'yes'
     }, (err, res) => {
         if (err) {
-            console.error('Dial failed:', err);
+            log(LOG_LEVELS.ERROR, 'Dial action failed', { 
+                caller: callerExtension, 
+                target: targetExtension,
+                error: err.message 
+            });
             broadcastToUser(callerExtension, {
                 type: 'dialFailed',
                 extension: targetExtension,
                 reason: err.message || 'Unknown error'
             });
         } else {
-            console.log('Dial successful:', res);
+            log(LOG_LEVELS.INFO, 'Dial action successful', { 
+                caller: callerExtension, 
+                target: targetExtension,
+                response: res 
+            });
             // Store call information for tracking
             const callId = `${callerExtension}-${targetExtension}-${Date.now()}`;
             activeCalls.set(callId, {
@@ -438,68 +527,173 @@ function handleDial(targetExtension, callerExtension) {
                 channel: res.Channel || channel,
                 startTime: new Date()
             });
+            log(LOG_LEVELS.DEBUG, 'Active call stored', { callId: callId });
         }
     });
 }
 
-// Enhanced: Monitor call events for better feedback
-amiConnection.on('newchannel', (event) => {
-    console.log('New channel:', event);
+function handleHangup(channel, userExtension) {
+    log(LOG_LEVELS.INFO, 'Hangup request', { user: userExtension, channel: channel });
     
-    // Check if this is a call we originated
-    if (event.channel.startsWith('Local/') && event.calleridnum) {
-        const targetExtension = event.channel.split('/')[1].split('@')[0];
-        const callerExtension = event.calleridnum;
-        
-        broadcastToUser(callerExtension, {
-            type: 'callProgress',
-            extension: targetExtension,
-            status: 'Ringing'
-        });
-    }
-});
-
-amiConnection.on('bridge', (event) => {
-    if (event.bridgestate === 'Link') {
-        console.log('Call connected:', event);
-        
-        // Extract extensions from channel names
-        const callerExt = extractExtensionFromChannel(event.channel1);
-        const targetExt = extractExtensionFromChannel(event.channel2);
-        
-        if (callerExt && targetExt) {
-            broadcastToUser(callerExt, {
-                type: 'callConnected',
-                extension: targetExt,
-                callerId: event.callerid1,
-                connectedLine: event.callerid2
+    amiConnection.action({
+        'Action': 'Hangup',
+        'Channel': channel
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Hangup failed', { 
+                user: userExtension, 
+                channel: channel,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Hangup successful', { 
+                user: userExtension, 
+                channel: channel,
+                response: res 
             });
         }
-    }
-});
-
-amiConnection.on('hangup', (event) => {
-    console.log('Call ended:', event);
-    
-    // Extract extension from channel and notify
-    const extension = extractExtensionFromChannel(event.channel);
-    if (extension) {
-        broadcastToUser(extension, {
-            type: 'callEnded',
-            channel: event.channel,
-            reason: event.cause || 'Normal hangup'
-        });
-    }
-});
-
-// Helper function to extract extension from channel name
-function extractExtensionFromChannel(channel) {
-    const match = channel.match(/Local\/(\d+)@/);
-    return match ? match[1] : null;
+    });
 }
 
-// Helper function to broadcast to specific user
+function handleTransfer(channel, target, userExtension) {
+    log(LOG_LEVELS.INFO, 'Transfer request', { 
+        user: userExtension, 
+        channel: channel, 
+        target: target 
+    });
+    
+    amiConnection.action({
+        'Action': 'Redirect',
+        'Channel': channel,
+        'Context': 'from-internal',
+        'Exten': target,
+        'Priority': 1
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Transfer failed', { 
+                user: userExtension, 
+                channel: channel,
+                target: target,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Transfer successful', { 
+                user: userExtension, 
+                channel: channel,
+                target: target,
+                response: res 
+            });
+        }
+    });
+}
+
+function handleSpy(channel, spyExtension) {
+    log(LOG_LEVELS.INFO, 'Spy request', { user: spyExtension, channel: channel });
+    
+    amiConnection.action({
+        'Action': 'Originate',
+        'Channel': `Local/${spyExtension}@from-internal`,
+        'Context': 'from-internal',
+        'Exten': 'spy',
+        'Priority': 1,
+        'CallerID': `Spy <${spyExtension}>`,
+        'Variable': `SPY_CHANNEL=${channel}`
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Spy failed', { 
+                user: spyExtension, 
+                channel: channel,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Spy successful', { 
+                user: spyExtension, 
+                channel: channel,
+                response: res 
+            });
+        }
+    });
+}
+
+function handleWhisper(channel, whisperExtension) {
+    log(LOG_LEVELS.INFO, 'Whisper request', { user: whisperExtension, channel: channel });
+    
+    amiConnection.action({
+        'Action': 'Originate',
+        'Channel': `Local/${whisperExtension}@from-internal`,
+        'Context': 'from-internal',
+        'Exten': 'whisper',
+        'Priority': 1,
+        'CallerID': `Coach <${whisperExtension}>`,
+        'Variable': `SPY_CHANNEL=${channel}`
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Whisper failed', { 
+                user: whisperExtension, 
+                channel: channel,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Whisper successful', { 
+                user: whisperExtension, 
+                channel: channel,
+                response: res 
+            });
+        }
+    });
+}
+
+function handleQueuePause(agent, queue, pause = true) {
+    log(LOG_LEVELS.INFO, 'Queue pause request', { 
+        agent: agent, 
+        queue: queue, 
+        pause: pause 
+    });
+    
+    amiConnection.action({
+        'Action': 'QueuePause',
+        'Interface': `Local/${agent}@from-internal`,
+        'Queue': queue,
+        'Paused': pause ? '1' : '0'
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Queue pause failed', { 
+                agent: agent, 
+                queue: queue,
+                pause: pause,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Queue pause successful', { 
+                agent: agent, 
+                queue: queue,
+                pause: pause,
+                response: res 
+            });
+        }
+    });
+}
+
+// Broadcast functions
+function broadcastToAll(message) {
+    log(LOG_LEVELS.DEBUG, 'Broadcasting to all clients', { 
+        messageType: message.type, 
+        clientCount: connections.size 
+    });
+    
+    connections.forEach((userInfo, ws) => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(message));
+        }
+    });
+}
+
 function broadcastToUser(extension, message) {
+    log(LOG_LEVELS.DEBUG, 'Broadcasting to user', { 
+        extension: extension, 
+        messageType: message.type 
+    });
+    
     connections.forEach((userInfo, ws) => {
         if (userInfo.extension === extension && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(message));
@@ -507,24 +701,41 @@ function broadcastToUser(extension, message) {
     });
 }
 
-// Track active calls
-const activeCalls = new Map();
+// Graceful shutdown handling
+process.on('SIGINT', () => {
+    log(LOG_LEVELS.INFO, 'Received SIGINT, shutting down gracefully');
+    shutdown();
+});
 
-// Enhanced transfer function
-function handleTransfer(channel, target, context = 'from-internal') {
-    console.log(`Transferring ${channel} to ${target}`);
+process.on('SIGTERM', () => {
+    log(LOG_LEVELS.INFO, 'Received SIGTERM, shutting down gracefully');
+    shutdown();
+});
+
+function shutdown() {
+    log(LOG_LEVELS.INFO, 'Starting shutdown process');
     
-    amiConnection.action({
-        'Action': 'Redirect',
-        'Channel': channel,
-        'Context': context,
-        'Exten': target,
-        'Priority': 1
-    }, (err, res) => {
-        if (err) {
-            console.error('Transfer failed:', err);
-        } else {
-            console.log('Transfer successful:', res);
-        }
+    // Close WebSocket connections
+    connections.forEach((userInfo, ws) => {
+        ws.close(1001, 'Server shutting down');
     });
+    
+    // Close WebSocket server
+    wss.close(() => {
+        log(LOG_LEVELS.INFO, 'WebSocket server closed');
+    });
+    
+    // Close HTTP server
+    app.close(() => {
+        log(LOG_LEVELS.INFO, 'HTTP server closed');
+        process.exit(0);
+    });
+    
+    // Force exit after 10 seconds
+    setTimeout(() => {
+        log(LOG_LEVELS.WARN, 'Forcing shutdown after timeout');
+        process.exit(1);
+    }, 10000);
 }
+
+log(LOG_LEVELS.INFO, 'Server initialization complete');

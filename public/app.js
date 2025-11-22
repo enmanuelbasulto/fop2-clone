@@ -597,7 +597,7 @@ function createDialpadModal() {
             <span class="close" onclick="closeDialpad()">&times;</span>
             <h3>Dialpad</h3>
             <div class="dialpad-display">
-                <input type="text" id="dialpadInput" readonly style="width: 100%; padding: 0.5rem; margin-bottom: 1rem; text-align: center; font-size: 1.2rem;">
+                <input type="text" id="dialpadInput" readonly style="width: 100%; padding: 0.5rem; margin-bottom: 1rem; text-align: center; font-size: 1.2rem; border: 1px solid #ddd; border-radius: 4px;">
             </div>
             <div class="dialpad">
                 <div class="dialpad-row">
@@ -623,15 +623,12 @@ function createDialpadModal() {
                 <div class="dialpad-actions">
                     <button onclick="dialFromDialpad()" class="dial-btn">Dial</button>
                     <button onclick="clearDialpad()" class="clear-btn">Clear</button>
+                    <button onclick="closeDialpad()" class="clear-btn">Close</button>
                 </div>
             </div>
         </div>
     `;
     document.body.appendChild(modal);
-}
-
-function closeDialpad() {
-    document.getElementById('dialpadModal').style.display = 'none';
 }
 
 function appendToDial(digit) {
@@ -642,6 +639,10 @@ function appendToDial(digit) {
     if (dialpadInput) {
         dialpadInput.value += digit;
     }
+}
+
+function closeDialpad() {
+    document.getElementById('dialpadModal').style.display = 'none';
 }
 
 function clearDialpad() {
