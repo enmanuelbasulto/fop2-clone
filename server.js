@@ -450,6 +450,10 @@ function handleClientMessage(ws, message, userInfo) {
         case 'pause':
             handleQueuePause(userInfo.extension, message.queue, message.pause);
             break;
+        // Add to your handleClientMessage function in server.js
+        case 'answer':
+            handleAnswerCall(message.channel, message.extension, userInfo.extension);
+            break;
         default:
             log(LOG_LEVELS.WARN, 'Unknown action received', { 
                 action: message.action,
@@ -463,6 +467,38 @@ function handleClientMessage(ws, message, userInfo) {
 }
 
 // Enhanced Call Control Functions with better logging
+// Add answer call handler
+function handleAnswerCall(channel, extension, userExtension) {
+    log(LOG_LEVELS.INFO, 'Answer call request', { 
+        user: userExtension, 
+        channel: channel, 
+        extension: extension 
+    });
+    
+    // Answer the channel (for SIP channels)
+    amiConnection.action({
+        'Action': 'Redirect',
+        'Channel': channel,
+        'Context': 'from-internal',
+        'Exten': extension,
+        'Priority': 1
+    }, (err, res) => {
+        if (err) {
+            log(LOG_LEVELS.ERROR, 'Answer call failed', { 
+                user: userExtension, 
+                channel: channel,
+                error: err.message 
+            });
+        } else {
+            log(LOG_LEVELS.INFO, 'Call answered successfully', { 
+                user: userExtension, 
+                channel: channel,
+                response: res 
+            });
+        }
+    });
+}
+
 function handleDial(targetExtension, callerExtension) {
     log(LOG_LEVELS.INFO, 'Dial request', { caller: callerExtension, target: targetExtension });
     
@@ -699,6 +735,93 @@ function broadcastToUser(extension, message) {
             ws.send(JSON.stringify(message));
         }
     });
+}
+
+// Add to your AMI event handlers section in server.js
+
+// Handle incoming calls
+amiConnection.on('newstate', (event) => {
+    log(LOG_LEVELS.DEBUG, 'Channel state change', event);
+    
+    // Detect inbound calls (ringing state)
+    if (event.channelstate === '4' || event.channelstate === '5') {
+        // This is a ringing channel (incoming call)
+        const extension = extractExtensionFromChannel(event.channel);
+        if (extension) {
+            log(LOG_LEVELS.INFO, 'Incoming call detected', {
+                extension: extension,
+                channel: event.channel,
+                callerId: event.calleridnum
+            });
+            
+            broadcastToAll({
+                type: 'incomingCall',
+                extension: extension,
+                channel: event.channel,
+                callerId: event.calleridnum || 'Unknown',
+                callerIdName: event.calleridname || 'Unknown'
+            });
+        }
+    }
+});
+
+// Handle answered calls
+amiConnection.on('bridgestate', (event) => {
+    if (event.bridgestate === 'Link') {
+        log(LOG_LEVELS.INFO, 'Call answered/bridged', event);
+        
+        // Extract both parties from the bridge
+        const callerExt = extractExtensionFromChannel(event.channel1);
+        const calleeExt = extractExtensionFromChannel(event.channel2);
+        
+        if (callerExt && calleeExt) {
+            broadcastToAll({
+                type: 'callAnswered',
+                callerExtension: callerExt,
+                calleeExtension: calleeExt,
+                channel1: event.channel1,
+                channel2: event.channel2
+            });
+        }
+    }
+});
+
+// Enhanced hangup handler to detect call completion
+amiConnection.on('hangup', (event) => {
+    log(LOG_LEVELS.INFO, 'Call completed', event);
+    
+    const extension = extractExtensionFromChannel(event.channel);
+    if (extension) {
+        broadcastToAll({
+            type: 'callCompleted',
+            extension: extension,
+            channel: event.channel,
+            duration: event.duration || '0',
+            reason: event.cause_txt || 'Normal hangup'
+        });
+    }
+});
+
+// Improved extension extraction to handle more channel types
+function extractExtensionFromChannel(channel) {
+    // Handle Local/channel formats
+    let match = channel.match(/Local\/(\d+)@/);
+    if (match) return match[1];
+    
+    // Handle PJSIP/channel formats
+    match = channel.match(/PJSIP\/(\d+)/);
+    if (match) return match[1];
+    
+    // Handle SIP/channel formats
+    match = channel.match(/SIP\/(\d+)/);
+    if (match) return match[1];
+    
+    // Handle DAHDI channels (if using analog/digital cards)
+    match = channel.match(/DAHDI\/(\d+)/);
+    if (match) return match[1];
+    
+    log(LOG_LEVELS.DEBUG, 'Could not extract extension from channel', { channel: channel });
+    return null;
 }
 
 // Graceful shutdown handling

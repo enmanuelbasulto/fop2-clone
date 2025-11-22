@@ -718,3 +718,119 @@ document.addEventListener('visibilitychange', function() {
         connectWebSocket();
     }
 });
+
+// Add to your WebSocket message handler in app.js
+case 'incomingCall':
+    showIncomingCall(data);
+    break;
+case 'callAnswered':
+    updateCallAnswered(data);
+    break;
+case 'callCompleted':
+    updateCallCompleted(data);
+    break;
+
+// Inbound call handling functions
+function showIncomingCall(callData) {
+    log(LOG_LEVELS.INFO, 'Showing incoming call', callData);
+    
+    // Create or update incoming call notification
+    let incomingCallElement = document.getElementById('incomingCall');
+    
+    if (!incomingCallElement) {
+        incomingCallElement = document.createElement('div');
+        incomingCallElement.id = 'incomingCall';
+        incomingCallElement.className = 'incoming-call-alert';
+        incomingCallElement.innerHTML = `
+            <div class="incoming-call-content">
+                <div class="caller-info">
+                    <div class="caller-number">${callData.callerId}</div>
+                    <div class="caller-name">${callData.callerIdName}</div>
+                    <div class="call-status">Incoming call to ${callData.extension}</div>
+                </div>
+                <div class="call-actions">
+                    <button onclick="answerCall('${callData.channel}', '${callData.extension}')" class="answer-btn">Answer</button>
+                    <button onclick="rejectCall('${callData.channel}')" class="reject-btn">Reject</button>
+                </div>
+            </div>
+        `;
+        
+        // Add to the top of the container
+        const container = document.querySelector('.container');
+        if (container) {
+            container.insertBefore(incomingCallElement, container.firstChild);
+        }
+    }
+    
+    // Flash the extension that's ringing
+    const extensionElement = document.querySelector(`.extension .number:contains("${callData.extension}")`)?.closest('.extension');
+    if (extensionElement) {
+        extensionElement.classList.add('ringing');
+        extensionElement.style.animation = 'pulse 1s infinite';
+    }
+}
+
+function updateCallAnswered(callData) {
+    log(LOG_LEVELS.INFO, 'Call answered', callData);
+    
+    // Remove incoming call alert
+    const incomingCallElement = document.getElementById('incomingCall');
+    if (incomingCallElement) {
+        incomingCallElement.remove();
+    }
+    
+    // Update extension status to busy
+    if (callData.calleeExtension) {
+        updateExtension(callData.calleeExtension, 'inuse');
+    }
+    if (callData.callerExtension) {
+        updateExtension(callData.callerExtension, 'inuse');
+    }
+    
+    showNotification(`Call answered: ${callData.callerExtension} → ${callData.calleeExtension}`, 'success');
+}
+
+function updateCallCompleted(callData) {
+    log(LOG_LEVELS.INFO, 'Call completed', callData);
+    
+    // Update extension status to idle
+    updateExtension(callData.extension, 'idle');
+    
+    // Remove any ringing animation
+    const extensionElement = document.querySelector(`.extension .number:contains("${callData.extension}")`)?.closest('.extension');
+    if (extensionElement) {
+        extensionElement.classList.remove('ringing');
+        extensionElement.style.animation = '';
+    }
+    
+    showNotification(`Call ended: ${callData.extension} (${callData.duration}s)`, 'info');
+}
+
+// Call control functions for inbound calls
+function answerCall(channel, extension) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        // For PJSIP channels, we need to answer the channel
+        ws.send(JSON.stringify({
+            action: 'answer',
+            channel: channel,
+            extension: extension
+        }));
+        log(LOG_LEVELS.INFO, 'Answering call', { channel: channel, extension: extension });
+    }
+}
+
+function rejectCall(channel) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: 'hangup',
+            channel: channel
+        }));
+        log(LOG_LEVELS.INFO, 'Rejecting call', { channel: channel });
+    }
+    
+    // Remove incoming call alert
+    const incomingCallElement = document.getElementById('incomingCall');
+    if (incomingCallElement) {
+        incomingCallElement.remove();
+    }
+}
