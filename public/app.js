@@ -158,7 +158,6 @@ function connectWebSocket() {
                 statisticsData = data.data;
                 updateStatisticsDisplay();
                 break;
-
             case 'extensionStatus':
                 // Update specific extension in statistics
                 if (statisticsData && statisticsData.extensions) {
@@ -169,6 +168,10 @@ function connectWebSocket() {
                     }
                 }
                 break;
+            case 'statsUpdate':
+                statisticsData = data.data;
+                updateStatisticsDisplay();
+                break;               
             default:
                 console.log('Unknown message type:', data.type);
         }
@@ -1103,12 +1106,6 @@ function updateRecentCallsStats() {
     html += '</tbody></table>';
     container.innerHTML = html;
 }
-
-// Add to WebSocket message handler for real-time updates
-case 'statsUpdate':
-    statisticsData = data.data;
-    updateStatisticsDisplay();
-    break;
 
 // Initialize statistics when panel loads
 if (window.location.pathname === '/panel' || window.location.pathname === '/panel.html') {
