@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Operator Panel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="panel-header">
+    <h1>Operator Panel</h1>
+    <div class="user-info">
+        <span id="userDisplay">Welcome</span>
+        <div id="connectionStatus" style="margin: 0 1rem; padding: 0.25rem 0.5rem; background: #6c757d; color: white; border-radius: 4px; font-size: 0.8rem;">
+            Connecting...
+        </div>
+        <button onclick="logout()">Logout</button>
+    </div>
+</div>
+    <div class="container">
+        <!-- Quick Actions -->
+<!-- Enhanced Action Bar -->
+<div class="action-bar">
+    <div class="dial-section">
+        <input type="text" id="dialInput" placeholder="Enter extension or click on extension below..." 
+               pattern="\d+" title="Enter numbers only">
+        <button onclick="dialExtension()" class="dial-btn">Dial</button>
+        <button onclick="clearDial()" class="clear-btn">Clear</button>
+    </div>
+    <div class="quick-actions">
+        <button onclick="toggleQueuePause()" id="pauseBtn">Pause</button>
+        <button onclick="showDialpad()" id="dialpadBtn">Dialpad</button>
+    </div>
+</div>
+
+<!-- Add this section for active call info -->
+<div id="activeCallContainer" class="active-call-container" style="display: none;">
+    <div class="active-call">
+        <span id="activeCallInfo"></span>
+        <button onclick="hangupActiveCall()" class="hangup-btn">Hangup</button>
+    </div>
+</div>
+
+<!-- Add dialpad modal -->
+<div id="dialpadModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <span class="close" onclick="closeDialpad()">&times;</span>
+        <h3>Dialpad</h3>
+        <div class="dialpad">
+            <div class="dialpad-row">
+                <button class="dialpad-btn" onclick="appendToDial('1')">1</button>
+                <button class="dialpad-btn" onclick="appendToDial('2')">2</button>
+                <button class="dialpad-btn" onclick="appendToDial('3')">3</button>
+            </div>
+            <div class="dialpad-row">
+                <button class="dialpad-btn" onclick="appendToDial('4')">4</button>
+                <button class="dialpad-btn" onclick="appendToDial('5')">5</button>
+                <button class="dialpad-btn" onclick="appendToDial('6')">6</button>
+            </div>
+            <div class="dialpad-row">
+                <button class="dialpad-btn" onclick="appendToDial('7')">7</button>
+                <button class="dialpad-btn" onclick="appendToDial('8')">8</button>
+                <button class="dialpad-btn" onclick="appendToDial('9')">9</button>
+            </div>
+            <div class="dialpad-row">
+                <button class="dialpad-btn" onclick="appendToDial('*')">*</button>
+                <button class="dialpad-btn" onclick="appendToDial('0')">0</button>
+                <button class="dialpad-btn" onclick="appendToDial('#')">#</button>
+            </div>
+            <div class="dialpad-actions">
+                <button onclick="dialFromDialpad()" class="dial-btn">Dial</button>
+                <button onclick="clearDialpad()" class="clear-btn">Clear</button>
+            </div>
+        </div>
+    </div>
+</div>
+        <!-- Extensions Status -->
+        <div class="section">
+            <h2>Extensions</h2>
+            <div id="extensionsContainer" class="extensions-grid"></div>
+        </div>
+
+        <!-- Active Calls -->
+        <div class="section">
+            <h2>Active Calls</h2>
+            <div id="callsContainer" class="calls-list"></div>
+        </div>
+
+        <!-- Queue Status -->
+        <div class="section">
+            <h2>Queue Status</h2>
+            <div id="queuesContainer" class="queues-grid"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

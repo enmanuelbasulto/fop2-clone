@@ -1,0 +1,16 @@
+{
+  "users": {
+    "251502": {
+      "password": "$2a$10$tI/.erOVJOpIPlpOxYUhZeX80nQd8F0tT0RNOkOAwXPV.iv0ZtBWu",
+      "name": "Enmanuel"
+    },
+    "251503": {
+      "password": "$2a$10$NvAOWLtrq7kM8e805jT8teBKA.eiL3UjhlR7FqMuW3qtTtqFCluj2",
+      "name": "EBM"
+    },
+    "1234": {
+      "password": "$2a$10$tITRqnU4z55/om1EbbLvgeB/pHKroQRf1J4xZNbwoXHMTN20qUvde",
+      "name": "1234"
+    }
+  }
+}
